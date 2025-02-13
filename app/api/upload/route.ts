@@ -2,11 +2,17 @@ import { Pinecone } from '@pinecone-database/pinecone';
 
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
+import { OpenAI } from '@langchain/openai';
+import { OpenAIEmbeddings } from '@langchain/openai';
+import { PineconeStore } from '@langchain/pinecone';
+
+
+import { NextResponse } from "next/server";
 
 
 const pinecone = new Pinecone({
-    apiKey: process.env.PINECONE_API_KEY!,    // ! is a non-null assertion operator which makes sure our env variable is not null 
-  });
+  apiKey: process.env.PINECONE_API_KEY!,    // ! is a non-null assertion operator which makes sure our env variable is not null 
+});
 
 
 export async function POST (req: Request ){
@@ -35,19 +41,53 @@ export async function POST (req: Request ){
         chunkOverlap: 200,
       });
 
-    const splitDocs = await textSplitter.splitDocuments(docs);
+      const splitDocs = await textSplitter.splitDocuments(docs);
 
 
     //add document id to each chunk 
+    const docsWithMetadata = splitDocs.map((doc) => ({
+        ...doc,
+        metadata: {
+          ...doc.metadata,
+          documentId,
+        },
+      }));
 
 
     //generate summary -- openai api key requirement
 
+    const openai = new OpenAI({
+      openAIApiKey: process.env.OPENAI_API_KEY!,
+    });
+
+    const summary = await openai.invoke(
+      `Summarize the following document for me : ${splitDocs [0].pageContent}`
+    );
+
+    // Store in Pinecone with metadata
+    const embeddings = new OpenAIEmbeddings({
+      openAIApiKey: process.env.OPENAI_API_KEY!,
+    });
+
+    const index = pinecone.Index(process.env.PINECONE_INDEX_NAME!);
+
+    await PineconeStore.fromDocuments(docsWithMetadata, embeddings, {
+      pineconeIndex: index,
+    });
+
+    return NextResponse.json({
+      summary,
+      documentId,
+      pageCount: docs.length,
+    });
 
 
-    //
+
         
     } catch (error) {
-        
+        const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+        console.error(errorMessage);
+        return new Response(errorMessage, { status: 500 });
     }
 }
